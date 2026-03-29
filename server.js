@@ -51,6 +51,12 @@ function migrateState(rawState) {
         ...(rawConfig.theme || {})
       },
       teacherPool: Array.isArray(rawConfig.teacherPool) ? rawConfig.teacherPool : defaults.config.teacherPool
+      ...(rawState.config || {}),
+      theme: {
+        ...defaults.config.theme,
+        ...((rawState.config && rawState.config.theme) || {})
+      },
+      teacherPool: Array.isArray(rawState.config?.teacherPool) ? rawState.config.teacherPool : defaults.config.teacherPool
     }
   };
 
@@ -107,6 +113,7 @@ let state = migrateState(rawState);
 if (JSON.stringify(rawState) !== JSON.stringify(state)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
 }
+let state = migrateState(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
 
 function saveState() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
@@ -220,19 +227,7 @@ const server = http.createServer(async (req, res) => {
       const body = await parseBody(req);
       const username = String(body.username || '').trim();
       const password = String(body.password || '');
-      let account = state.accounts.find((a) => a.username === username && a.password === password);
-      if (!account && username === 'admin' && password === 'admin123') {
-        const adminAccount = state.accounts.find((a) => a.username === 'admin');
-        if (adminAccount) {
-          adminAccount.password = 'admin123';
-          adminAccount.role = 'admin';
-          account = adminAccount;
-        } else {
-          account = { username: 'admin', password: 'admin123', role: 'admin' };
-          state.accounts.push(account);
-        }
-        saveState();
-      }
+      const account = state.accounts.find((a) => a.username === username && a.password === password);
       if (!account) return json(res, 401, { error: '账号或密码错误' });
       const token = crypto.randomUUID();
       sessions.set(token, { username: account.username, role: account.role });
