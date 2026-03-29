@@ -56,6 +56,42 @@ function unlockSpeechByGesture() {
   }
 }
 
+const VOICE_PROFILE_KEYWORDS = ['zhiling', '志玲', 'xiaoxiao', 'xiaoyi', 'huihui', 'female', '女'];
+
+function pickLinZhilingStyleVoice() {
+  const voices = speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const normalized = voices.map((voice) => ({
+    voice,
+    key: `${voice.name} ${voice.lang}`.toLowerCase()
+  }));
+
+  const preferred = normalized.find((item) => VOICE_PROFILE_KEYWORDS.some((k) => item.key.includes(k)));
+  if (preferred) return preferred.voice;
+
+  const zhFemale = normalized.find((item) => (item.key.includes('zh') || item.key.includes('cmn')) && item.key.includes('female'));
+  if (zhFemale) return zhFemale.voice;
+
+  const zhAny = normalized.find((item) => item.key.includes('zh') || item.key.includes('cmn'));
+  return zhAny ? zhAny.voice : voices[0];
+}
+
+function waitVoicesReady(timeout = 1500) {
+  return new Promise((resolve) => {
+    const ready = speechSynthesis.getVoices();
+    if (ready && ready.length) return resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      speechSynthesis.removeEventListener('voiceschanged', finish);
+      resolve();
+    };
+    speechSynthesis.addEventListener('voiceschanged', finish);
+    setTimeout(finish, timeout);
+  });
+}
+
 const api = async (url, method = 'GET', body) => {
   const res = await fetch(url, {
     method,
