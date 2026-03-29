@@ -39,17 +39,18 @@ function createDefaultState() {
 
 function migrateState(rawState) {
   const defaults = createDefaultState();
+  const rawConfig = rawState && rawState.config ? rawState.config : {};
   const merged = {
     ...defaults,
     ...rawState,
     config: {
       ...defaults.config,
-      ...(rawState.config || {}),
+      ...rawConfig,
       theme: {
         ...defaults.config.theme,
-        ...((rawState.config && rawState.config.theme) || {})
+        ...(rawConfig.theme || {})
       },
-      teacherPool: Array.isArray(rawState.config?.teacherPool) ? rawState.config.teacherPool : defaults.config.teacherPool
+      teacherPool: Array.isArray(rawConfig.teacherPool) ? rawConfig.teacherPool : defaults.config.teacherPool
     }
   };
 
@@ -101,8 +102,11 @@ function migrateState(rawState) {
 }
 
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(createDefaultState(), null, 2));
-let state = migrateState(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
-fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+const rawState = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+let state = migrateState(rawState);
+if (JSON.stringify(rawState) !== JSON.stringify(state)) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+}
 
 function saveState() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
