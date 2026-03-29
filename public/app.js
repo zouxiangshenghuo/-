@@ -3,6 +3,58 @@ let me = null;
 let currentState = null;
 let mode = 'hall';
 let deskCounter = 1;
+let speechUnlocked = false;
+let lastSpeechKey = '';
+
+const VOICE_PROFILE_KEYWORDS = ['zhiling', '志玲', 'xiaoxiao', 'xiaoyi', 'huihui', 'female', '女'];
+
+function pickLinZhilingStyleVoice() {
+  const voices = speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const normalized = voices.map((voice) => ({
+    voice,
+    key: `${voice.name} ${voice.lang}`.toLowerCase()
+  }));
+
+  const preferred = normalized.find((item) => VOICE_PROFILE_KEYWORDS.some((k) => item.key.includes(k)));
+  if (preferred) return preferred.voice;
+
+  const zhFemale = normalized.find((item) => (item.key.includes('zh') || item.key.includes('cmn')) && item.key.includes('female'));
+  if (zhFemale) return zhFemale.voice;
+
+  const zhAny = normalized.find((item) => item.key.includes('zh') || item.key.includes('cmn'));
+  return zhAny ? zhAny.voice : voices[0];
+}
+
+function waitVoicesReady(timeout = 1500) {
+  return new Promise((resolve) => {
+    const ready = speechSynthesis.getVoices();
+    if (ready && ready.length) return resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      speechSynthesis.removeEventListener('voiceschanged', finish);
+      resolve();
+    };
+    speechSynthesis.addEventListener('voiceschanged', finish);
+    setTimeout(finish, timeout);
+  });
+}
+
+
+function unlockSpeechByGesture() {
+  if (speechUnlocked || !window.speechSynthesis) return;
+  try {
+    const unlockUtterance = new SpeechSynthesisUtterance('');
+    unlockUtterance.volume = 0;
+    speechSynthesis.speak(unlockUtterance);
+    speechSynthesis.cancel();
+    speechUnlocked = true;
+  } catch {
+    speechUnlocked = false;
+  }
+}
 
 const VOICE_PROFILE_KEYWORDS = ['zhiling', '志玲', 'xiaoxiao', 'xiaoyi', 'huihui', 'female', '女'];
 
@@ -60,13 +112,19 @@ function applyTheme() {
 }
 
 async function speak(record) {
-  if (!record || !currentState) return;
+  if (!record || !currentState || !window.speechSynthesis) return;
+  const speechKey = `${record.number}-${record.counterNumber}-${record.calledAt || ''}`;
+  if (speechKey === lastSpeechKey) return;
+  lastSpeechKey = speechKey;
+
   await waitVoicesReady();
   speechSynthesis.cancel();
 
   const repeat = currentState.config.voiceRepeat;
-  const teacherText = (record.teachers || []).length ? `，由${record.teachers.join('、')}老师办理` : '';
-  const text = `请流水码 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
+  const teacherText = (record.teachers || []).length
+    ? `，由${record.teachers.join('、')}老师办理`
+    : '，当前登记处老师信息未配置';
+  const text = `请注意：流水码 ${record.number} ，请到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
   const selectedVoice = pickLinZhilingStyleVoice();
 
   for (let i = 0; i < repeat; i += 1) {
@@ -120,6 +178,7 @@ function renderLogin() {
       <p class="notice" id="err"></p>
     </div>`;
   document.getElementById('login').onclick = async () => {
+    unlockSpeechByGesture();
     try {
       await api('/api/login', 'POST', {
         username: document.getElementById('u').value.trim(),
@@ -302,10 +361,12 @@ function bindActions() {
   const hallBtn = document.getElementById('hallBtn');
   const deskBtn = document.getElementById('deskBtn');
   if (hallBtn) hallBtn.onclick = () => {
+    unlockSpeechByGesture();
     mode = 'hall';
     render();
   };
   if (deskBtn) deskBtn.onclick = () => {
+    unlockSpeechByGesture();
     mode = 'desk';
     render();
   };
@@ -318,8 +379,10 @@ function bindActions() {
     };
 
     document.getElementById('call').onclick = async () => {
+      unlockSpeechByGesture();
       try {
-        await api('/api/call-next', 'POST', { counterNumber: deskCounter });
+        const record = await api('/api/call-next', 'POST', { counterNumber: deskCounter });
+        void speak(record);
         document.getElementById('deskErr').textContent = '叫号成功';
       } catch (e) {
         document.getElementById('deskErr').textContent = e.message;
