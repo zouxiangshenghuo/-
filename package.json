@@ -1,0 +1,9 @@
+{
+  "name": "enrollment-calling-system",
+  "version": "1.0.0",
+  "description": "Web-based enrollment queue calling system",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

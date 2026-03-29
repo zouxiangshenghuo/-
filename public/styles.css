@@ -1,0 +1,26 @@
+:root { font-family: "Microsoft YaHei", sans-serif; color: #1f2937; }
+body { margin: 0; background: linear-gradient(145deg, #f3f7ff 0%, #fef7f7 100%); }
+#app { max-width: 1180px; margin: 0 auto; padding: 20px; }
+.card {
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 22px rgba(7, 35, 88, .12);
+  border: 1px solid #dce7ff;
+}
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+input, select, button, textarea { padding: 8px 10px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; }
+button { background: #0f4aa8; color: white; border: none; cursor: pointer; }
+button.secondary { background: #1f6fd1; }
+button.danger { background: #dc2626; }
+h1,h2,h3 { margin: 8px 0; }
+.big-number { font-size: 58px; font-weight: 700; color: #0f4aa8; text-shadow: 0 2px 0 #d6e5ff; }
+.table { width: 100%; border-collapse: collapse; }
+.table th,.table td { border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+.tag { background: #e7f0ff; color: #0f4aa8; padding: 2px 10px; border-radius: 999px; font-weight: 600; }
+.grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.notice { color: #b45309; }
+.top-header { justify-content: space-between; border-top: 5px solid #c9272d; }
+.school-title { color: #c9272d; font-weight: 700; letter-spacing: 1px; font-size: 14px; }
+.counter-row { background: #f7fbff; border: 1px dashed #bdd5ff; padding: 10px; border-radius: 10px; margin-bottom: 10px; }
