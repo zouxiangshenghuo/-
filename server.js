@@ -355,13 +355,15 @@ const server = http.createServer(async (req, res) => {
 
       if (req.method === 'POST' && req.url === '/api/admin/accounts') {
         const body = await parseBody(req);
-        if (!body.username || !body.password || !['admin', 'user'].includes(body.role)) return json(res, 400, { error: '参数错误' });
-        const existed = state.accounts.find((a) => a.username === body.username);
+        const username = String(body.username || '').trim();
+        const password = String(body.password || '');
+        if (!username || !password || !['admin', 'user'].includes(body.role)) return json(res, 400, { error: '参数错误' });
+        const existed = state.accounts.find((a) => a.username === username);
         if (existed) {
-          existed.password = body.password;
+          existed.password = password;
           existed.role = body.role;
         } else {
-          state.accounts.push({ username: body.username, password: body.password, role: body.role });
+          state.accounts.push({ username, password, role: body.role });
         }
         saveState();
         return json(res, 200, { ok: true });
