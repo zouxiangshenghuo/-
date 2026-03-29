@@ -56,42 +56,6 @@ function unlockSpeechByGesture() {
   }
 }
 
-const VOICE_PROFILE_KEYWORDS = ['zhiling', '志玲', 'xiaoxiao', 'xiaoyi', 'huihui', 'female', '女'];
-
-function pickLinZhilingStyleVoice() {
-  const voices = speechSynthesis.getVoices() || [];
-  if (!voices.length) return null;
-  const normalized = voices.map((voice) => ({
-    voice,
-    key: `${voice.name} ${voice.lang}`.toLowerCase()
-  }));
-
-  const preferred = normalized.find((item) => VOICE_PROFILE_KEYWORDS.some((k) => item.key.includes(k)));
-  if (preferred) return preferred.voice;
-
-  const zhFemale = normalized.find((item) => (item.key.includes('zh') || item.key.includes('cmn')) && item.key.includes('female'));
-  if (zhFemale) return zhFemale.voice;
-
-  const zhAny = normalized.find((item) => item.key.includes('zh') || item.key.includes('cmn'));
-  return zhAny ? zhAny.voice : voices[0];
-}
-
-function waitVoicesReady(timeout = 1500) {
-  return new Promise((resolve) => {
-    const ready = speechSynthesis.getVoices();
-    if (ready && ready.length) return resolve();
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      speechSynthesis.removeEventListener('voiceschanged', finish);
-      resolve();
-    };
-    speechSynthesis.addEventListener('voiceschanged', finish);
-    setTimeout(finish, timeout);
-  });
-}
-
 const api = async (url, method = 'GET', body) => {
   const res = await fetch(url, {
     method,
@@ -129,15 +93,11 @@ async function speak(record) {
 
   const repeat = currentState.config.voiceRepeat;
   const text = formatBroadcastText(record);
-  const teacherText = (record.teachers || []).length
-    ? `，由${record.teachers.join('、')}老师办理`
-    : '，当前登记处老师信息未配置';
-  const text = `请注意：流水码 ${record.number} ，请到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
   const selectedVoice = pickLinZhilingStyleVoice();
 
   for (let i = 0; i < repeat; i += 1) {
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = selectedVoice?.lang || 'zh-CN';
+    utterance.lang = (selectedVoice && selectedVoice.lang) || 'zh-CN';
     utterance.rate = 0.95;
     utterance.pitch = 1.15;
     if (selectedVoice) utterance.voice = selectedVoice;
@@ -274,8 +234,8 @@ function counterRowsHtml() {
   const teacherOptions = ['<option value="">未选择</option>', ...teacherPool.map((name) => `<option value="${name}">${name}</option>`)].join('');
   return rows
     .map(([counter, teachers], idx) => {
-      const teacherA = teachers?.[0] || '';
-      const teacherB = teachers?.[1] || '';
+      const teacherA = (teachers && teachers[0]) || '';
+      const teacherB = (teachers && teachers[1]) || '';
       return `<div class="row counter-row" data-row="${idx}">
       <label>登记处
         <select class="counter-select">
