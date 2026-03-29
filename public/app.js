@@ -103,6 +103,13 @@ const api = async (url, method = 'GET', body) => {
   return data;
 };
 
+
+function formatBroadcastText(record) {
+  const teachers = (record.teachers || []).filter(Boolean);
+  const teacherText = teachers.length ? teachers.join('、') : '老师未分配';
+  return `请注意：序列号 ${record.number} ，请到登记处 ${record.counterNumber} 办理，负责老师：${teacherText}`;
+}
+
 function applyTheme() {
   if (!currentState) return;
   const { theme = {} } = currentState.config;
@@ -121,6 +128,7 @@ async function speak(record) {
   speechSynthesis.cancel();
 
   const repeat = currentState.config.voiceRepeat;
+  const text = formatBroadcastText(record);
   const teacherText = (record.teachers || []).length
     ? `，由${record.teachers.join('、')}老师办理`
     : '，当前登记处老师信息未配置';
@@ -211,7 +219,7 @@ function renderHall() {
     ${
       latest
         ? `<div class="big-number">${latest.number}</div>
-      <h3>请到 ${latest.counterNumber} 号登记处（${(latest.teachers || []).join('、') || '待配置老师'}）</h3>`
+      <h3>当前叫号：序列号 ${latest.number} ｜登记处 ${latest.counterNumber} ｜老师 ${((latest.teachers || []).join('、') || '待配置')}</h3>`
         : '<p>暂无叫号记录</p>'
     }
   </div>
