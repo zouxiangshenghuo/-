@@ -39,11 +39,18 @@ function createDefaultState() {
 
 function migrateState(rawState) {
   const defaults = createDefaultState();
+  const rawConfig = rawState && rawState.config ? rawState.config : {};
   const merged = {
     ...defaults,
     ...rawState,
     config: {
       ...defaults.config,
+      ...rawConfig,
+      theme: {
+        ...defaults.config.theme,
+        ...(rawConfig.theme || {})
+      },
+      teacherPool: Array.isArray(rawConfig.teacherPool) ? rawConfig.teacherPool : defaults.config.teacherPool
       ...(rawState.config || {}),
       theme: {
         ...defaults.config.theme,
@@ -54,6 +61,23 @@ function migrateState(rawState) {
   };
 
   merged.accounts = Array.isArray(merged.accounts) ? merged.accounts : defaults.accounts;
+  const normalizedAccounts = [];
+  const accountMap = new Map();
+  merged.accounts.forEach((account) => {
+    if (!account || !account.username || !account.password || !['admin', 'user'].includes(account.role)) return;
+    const username = String(account.username).trim();
+    if (!username) return;
+    if (accountMap.has(username)) return;
+    accountMap.set(username, true);
+    normalizedAccounts.push({ username, password: String(account.password), role: account.role });
+  });
+  if (!normalizedAccounts.find((a) => a.username === 'admin' && a.role === 'admin')) {
+    normalizedAccounts.push({ username: 'admin', password: 'admin123', role: 'admin' });
+  }
+  if (!normalizedAccounts.find((a) => a.username === 'user')) {
+    normalizedAccounts.push({ username: 'user', password: 'user123', role: 'user' });
+  }
+  merged.accounts = normalizedAccounts;
   merged.pendingNumbers = Array.isArray(merged.pendingNumbers) ? merged.pendingNumbers : defaults.pendingNumbers;
   merged.calledRecords = Array.isArray(merged.calledRecords) ? merged.calledRecords : [];
 
@@ -84,6 +108,11 @@ function migrateState(rawState) {
 }
 
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(createDefaultState(), null, 2));
+const rawState = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
+let state = migrateState(rawState);
+if (JSON.stringify(rawState) !== JSON.stringify(state)) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
+}
 let state = migrateState(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
 
 function saveState() {
@@ -148,6 +177,15 @@ function publicState() {
   };
 }
 
+function getNumberStatus(number) {
+  if (!Number.isInteger(number)) return { status: 'invalid' };
+  if (number < state.config.rangeStart || number > state.config.rangeEnd) return { status: 'out_of_range' };
+  if (state.pendingNumbers.includes(number)) return { status: 'pending' };
+  const latestCalled = [...state.calledRecords].reverse().find((item) => item.number === number) || null;
+  if (latestCalled) return { status: 'called', latestCalled };
+  return { status: 'unused' };
+}
+
 function pushEvent(type, data) {
   const payload = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const client of sseClients) client.write(payload);
@@ -187,7 +225,9 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === 'POST' && req.url === '/api/login') {
       const body = await parseBody(req);
-      const account = state.accounts.find((a) => a.username === body.username && a.password === body.password);
+      const username = String(body.username || '').trim();
+      const password = String(body.password || '');
+      const account = state.accounts.find((a) => a.username === username && a.password === password);
       if (!account) return json(res, 401, { error: '账号或密码错误' });
       const token = crypto.randomUUID();
       sessions.set(token, { username: account.username, role: account.role });
@@ -224,6 +264,14 @@ const server = http.createServer(async (req, res) => {
       }
 
       if (user.role !== 'admin') return json(res, 403, { error: '无权限' });
+
+      if (req.method === 'GET' && req.url.startsWith('/api/admin/number-status')) {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const number = Number(url.searchParams.get('number'));
+        const result = getNumberStatus(number);
+        if (result.status === 'invalid') return json(res, 400, { error: '请输入有效流水码' });
+        return json(res, 200, { number, ...result });
+      }
 
       if (req.method === 'POST' && req.url === '/api/admin/config') {
         const body = await parseBody(req);
@@ -295,6 +343,7 @@ const server = http.createServer(async (req, res) => {
         if (!Number.isInteger(number) || number < state.config.rangeStart || number > state.config.rangeEnd) {
           return json(res, 400, { error: '号码不在当前配置区间内' });
         }
+        if (state.pendingNumbers.includes(number)) return json(res, 400, { error: '该号码已在待叫队列中' });
         state.pendingNumbers.push(number);
         normalizePending();
         saveState();

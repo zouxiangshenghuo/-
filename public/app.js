@@ -78,7 +78,7 @@ function renderLogin() {
   document.getElementById('login').onclick = async () => {
     try {
       await api('/api/login', 'POST', {
-        username: document.getElementById('u').value,
+        username: document.getElementById('u').value.trim(),
         password: document.getElementById('p').value
       });
       init();
@@ -223,8 +223,10 @@ function renderAdmin() {
       <h3 class="center-text">过号处理</h3>
       <div class="row center-row">
         <input id="manualNumber" type="number" placeholder="输入过号流水码" />
+        <button id="searchNumber" class="secondary">搜索编码状态</button>
         <button id="addNumber">手动添加回队列</button>
       </div>
+      <p class="center-text" id="numberStatus"></p>
       <p class="notice center-text" id="manualErr"></p>
       <hr/>
       <h3 class="center-text">账号管理</h3>
@@ -357,6 +359,23 @@ function bindActions() {
       try {
         await api('/api/admin/add-number', 'POST', { number: Number(document.getElementById('manualNumber').value) });
         document.getElementById('manualErr').textContent = '已加入优先队列（按最小号优先）';
+        document.getElementById('numberStatus').textContent = '';
+      } catch (e) {
+        document.getElementById('manualErr').textContent = e.message;
+      }
+    };
+    document.getElementById('searchNumber').onclick = async () => {
+      try {
+        const number = Number(document.getElementById('manualNumber').value);
+        const result = await api(`/api/admin/number-status?number=${number}`);
+        const statusMap = {
+          pending: '待叫号队列中',
+          called: `已叫号（登记处${result.latestCalled.counterNumber}，时间：${new Date(result.latestCalled.calledAt).toLocaleString()}）`,
+          unused: '未叫号，且不在队列中',
+          out_of_range: '不在当前流水码区间内'
+        };
+        document.getElementById('numberStatus').textContent = `流水码 ${number} 当前状态：${statusMap[result.status] || result.status}`;
+        document.getElementById('manualErr').textContent = '';
       } catch (e) {
         document.getElementById('manualErr').textContent = e.message;
       }
