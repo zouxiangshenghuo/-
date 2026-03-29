@@ -4,6 +4,42 @@ let currentState = null;
 let mode = 'hall';
 let deskCounter = 1;
 
+const VOICE_PROFILE_KEYWORDS = ['zhiling', '志玲', 'xiaoxiao', 'xiaoyi', 'huihui', 'female', '女'];
+
+function pickLinZhilingStyleVoice() {
+  const voices = speechSynthesis.getVoices() || [];
+  if (!voices.length) return null;
+  const normalized = voices.map((voice) => ({
+    voice,
+    key: `${voice.name} ${voice.lang}`.toLowerCase()
+  }));
+
+  const preferred = normalized.find((item) => VOICE_PROFILE_KEYWORDS.some((k) => item.key.includes(k)));
+  if (preferred) return preferred.voice;
+
+  const zhFemale = normalized.find((item) => (item.key.includes('zh') || item.key.includes('cmn')) && item.key.includes('female'));
+  if (zhFemale) return zhFemale.voice;
+
+  const zhAny = normalized.find((item) => item.key.includes('zh') || item.key.includes('cmn'));
+  return zhAny ? zhAny.voice : voices[0];
+}
+
+function waitVoicesReady(timeout = 1500) {
+  return new Promise((resolve) => {
+    const ready = speechSynthesis.getVoices();
+    if (ready && ready.length) return resolve();
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      speechSynthesis.removeEventListener('voiceschanged', finish);
+      resolve();
+    };
+    speechSynthesis.addEventListener('voiceschanged', finish);
+    setTimeout(finish, timeout);
+  });
+}
+
 const api = async (url, method = 'GET', body) => {
   const res = await fetch(url, {
     method,
@@ -23,14 +59,22 @@ function applyTheme() {
   document.documentElement.style.setProperty('--dynamic-title-color', theme.titleColor || '#0f4aa8');
 }
 
-function speak(record) {
+async function speak(record) {
   if (!record || !currentState) return;
+  await waitVoicesReady();
+  speechSynthesis.cancel();
+
   const repeat = currentState.config.voiceRepeat;
   const teacherText = (record.teachers || []).length ? `，由${record.teachers.join('、')}老师办理` : '';
   const text = `请流水码 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
+  const selectedVoice = pickLinZhilingStyleVoice();
+
   for (let i = 0; i < repeat; i += 1) {
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'zh-CN';
+    utterance.lang = selectedVoice?.lang || 'zh-CN';
+    utterance.rate = 0.95;
+    utterance.pitch = 1.15;
+    if (selectedVoice) utterance.voice = selectedVoice;
     speechSynthesis.speak(utterance);
   }
 }
@@ -46,7 +90,7 @@ function connectEvents() {
     const data = JSON.parse(e.data);
     currentState = data;
     applyTheme();
-    speak(data.latestRecord);
+    void speak(data.latestRecord);
     render();
   });
 }
