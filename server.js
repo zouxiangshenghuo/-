@@ -39,24 +39,17 @@ function createDefaultState() {
 
 function migrateState(rawState) {
   const defaults = createDefaultState();
-  const rawConfig = rawState && rawState.config ? rawState.config : {};
   const merged = {
     ...defaults,
-    ...rawState,
+    ...(rawState || {}),
     config: {
       ...defaults.config,
-      ...rawConfig,
+      ...((rawState && rawState.config) || {}),
       theme: {
         ...defaults.config.theme,
-        ...(rawConfig.theme || {})
+        ...(((rawState && rawState.config && rawState.config.theme) || {}))
       },
-      teacherPool: Array.isArray(rawConfig.teacherPool) ? rawConfig.teacherPool : defaults.config.teacherPool
-      ...(rawState.config || {}),
-      theme: {
-        ...defaults.config.theme,
-        ...((rawState.config && rawState.config.theme) || {})
-      },
-      teacherPool: Array.isArray(rawState.config?.teacherPool) ? rawState.config.teacherPool : defaults.config.teacherPool
+      teacherPool: Array.isArray(rawState?.config?.teacherPool) ? rawState.config.teacherPool : defaults.config.teacherPool
     }
   };
 
@@ -113,7 +106,6 @@ let state = migrateState(rawState);
 if (JSON.stringify(rawState) !== JSON.stringify(state)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
 }
-let state = migrateState(JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')));
 
 function saveState() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
