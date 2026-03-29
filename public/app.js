@@ -3,6 +3,9 @@ let me = null;
 let currentState = null;
 let mode = 'hall';
 let deskCounter = 1;
+const COUNTER_OPTIONS_HTML = Array.from({ length: 100 }, (_, i) => i + 1)
+  .map((n) => `<option value="${n}">${n}号</option>`)
+  .join('');
 
 const api = async (url, method = 'GET', body) => {
   const res = await fetch(url, {
@@ -18,7 +21,8 @@ const api = async (url, method = 'GET', body) => {
 function speak(record) {
   if (!record || !currentState) return;
   const repeat = Math.max(1, Math.min(10, Number(currentState.config.voiceRepeat) || 1));
-  const text = `请流水码 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续`;
+  const teacherText = (record.teachers || []).length ? `，由${record.teachers.join('、')}老师办理` : '';
+  const text = `请流水码 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
   speechSynthesis.cancel();
   let spoken = 0;
   const play = () => {
@@ -111,12 +115,13 @@ function renderHall() {
 
 function renderDesk() {
   const t = currentState.config.counters[String(deskCounter)] || [];
+  const deskOptions = COUNTER_OPTIONS_HTML.replace(`value="${deskCounter}"`, `value="${deskCounter}" selected`);
   return `<div class="card">
     <h2>登记处界面</h2>
     <div class="row">
       <label>登记处编号：
         <select id="counter">
-          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n === deskCounter ? 'selected' : ''}>${n}号登记处</option>`).join('')}
+          ${deskOptions}
         </select>
       </label>
       <button id="saveCounter" class="secondary">设置</button>
@@ -135,10 +140,11 @@ function counterRowsHtml() {
   const rows = entries.length ? entries : [['1', ['']]];
   return rows.map(([counter, teachers], idx) => {
     const names = (teachers || []).slice(0, 3).join('、');
+    const rowOptions = COUNTER_OPTIONS_HTML.replace(`value="${counter}"`, `value="${counter}" selected`);
     return `<div class="row counter-row" data-row="${idx}">
       <label>登记处
         <select class="counter-select">
-          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${String(n) === String(counter) ? 'selected' : ''}>${n}号</option>`).join('')}
+          ${rowOptions}
         </select>
       </label>
       <input class="teacher-input" placeholder="老师姓名（最多3位，用、或,分隔）" value="${names}" />
@@ -227,7 +233,7 @@ function bindActions() {
       row.innerHTML = `
       <label>登记处
         <select class="counter-select">
-          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}">${n}号</option>`).join('')}
+          ${COUNTER_OPTIONS_HTML}
         </select>
       </label>
       <input class="teacher-input" placeholder="老师姓名（最多3位，用、或,分隔）" />
