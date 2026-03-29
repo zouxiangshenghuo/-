@@ -184,7 +184,8 @@ function renderLogin() {
         username: document.getElementById('u').value.trim(),
         password: document.getElementById('p').value
       });
-      init();
+      renderLogin();
+init();
     } catch (e) {
       document.getElementById('err').textContent = e.message;
     }
@@ -518,4 +519,5 @@ function render() {
   bindActions();
 }
 
+renderLogin();
 init();
