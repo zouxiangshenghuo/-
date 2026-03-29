@@ -18,7 +18,8 @@ const api = async (url, method = 'GET', body) => {
 function speak(record) {
   if (!record || !currentState) return;
   const repeat = currentState.config.voiceRepeat;
-  const text = `请流水号 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续`;
+  const teacherText = (record.teachers || []).length ? `，由${record.teachers.join('、')}老师办理` : '';
+  const text = `请流水码 ${record.number} 到 ${record.counterNumber} 号登记处办理入学手续${teacherText}`;
   for (let i = 0; i < repeat; i += 1) {
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'zh-CN';
@@ -77,8 +78,11 @@ function renderLogin() {
 }
 
 function renderHeader() {
-  return `<div class="card row">
-    <h2>${currentState.config.systemName}</h2>
+  return `<div class="card row top-header">
+    <div>
+      <div class="school-title">苏州立达中学校园服务平台</div>
+      <h2>${currentState.config.systemName}</h2>
+    </div>
     <span class="tag">当前待叫号：${currentState.pendingCount}</span>
     <button class="secondary" id="logout">退出登录</button>
   </div>`;
@@ -105,7 +109,11 @@ function renderDesk() {
   return `<div class="card">
     <h2>登记处界面</h2>
     <div class="row">
-      <label>登记处编号：<input id="counter" type="number" min="1" max="100" value="${deskCounter}" /></label>
+      <label>登记处编号：
+        <select id="counter">
+          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${n === deskCounter ? 'selected' : ''}>${n}号登记处</option>`).join('')}
+        </select>
+      </label>
       <button id="saveCounter" class="secondary">设置</button>
       <span>老师：${t.join('、') || '未配置'}</span>
     </div>
@@ -115,6 +123,23 @@ function renderDesk() {
     </div>
     <p id="deskErr" class="notice"></p>
   </div>`;
+}
+
+function counterRowsHtml() {
+  const entries = Object.entries(currentState.config.counters);
+  const rows = entries.length ? entries : [['1', ['']]];
+  return rows.map(([counter, teachers], idx) => {
+    const names = (teachers || []).slice(0, 3).join('、');
+    return `<div class="row counter-row" data-row="${idx}">
+      <label>登记处
+        <select class="counter-select">
+          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}" ${String(n) === String(counter) ? 'selected' : ''}>${n}号</option>`).join('')}
+        </select>
+      </label>
+      <input class="teacher-input" placeholder="老师姓名（最多3位，用、或,分隔）" value="${names}" />
+      <button type="button" class="danger remove-counter">删除</button>
+    </div>`;
+  }).join('');
 }
 
 function renderAdmin() {
@@ -127,8 +152,9 @@ function renderAdmin() {
         <label>到 <input id="end" type="number" min="1" max="1000" value="${currentState.config.rangeEnd}" /></label>
         <label>语音播报次数 <input id="repeat" type="number" min="1" max="10" value="${currentState.config.voiceRepeat}" /></label>
       </div>
-      <p>登记处老师配置（格式：登记处:老师1,老师2,老师3；每行一个）</p>
-      <textarea id="counters" rows="8" style="width:100%">${Object.entries(currentState.config.counters).map(([k,v]) => `${k}:${v.join(',')}`).join('\n')}</textarea>
+      <p>登记处老师配置（下拉选择登记处号码，填写老师姓名，最多3位）</p>
+      <div id="counterRows">${counterRowsHtml()}</div>
+      <button id="addCounterRow" type="button" class="secondary">新增登记处老师配置</button>
       <button id="saveConfig">保存配置</button>
       <p class="notice" id="cfgErr"></p>
     </div>
@@ -189,17 +215,37 @@ function bindActions() {
   }
 
   if (me.role === 'admin') {
+    const rowsContainer = document.getElementById('counterRows');
+    document.getElementById('addCounterRow').onclick = () => {
+      const row = document.createElement('div');
+      row.className = 'row counter-row';
+      row.innerHTML = `
+      <label>登记处
+        <select class="counter-select">
+          ${Array.from({ length: 100 }, (_, i) => i + 1).map((n) => `<option value="${n}">${n}号</option>`).join('')}
+        </select>
+      </label>
+      <input class="teacher-input" placeholder="老师姓名（最多3位，用、或,分隔）" />
+      <button type="button" class="danger remove-counter">删除</button>`;
+      rowsContainer.appendChild(row);
+    };
+
+    rowsContainer.onclick = (event) => {
+      if (!event.target.classList.contains('remove-counter')) return;
+      const rows = rowsContainer.querySelectorAll('.counter-row');
+      if (rows.length <= 1) return;
+      event.target.closest('.counter-row').remove();
+    };
+
     document.getElementById('saveConfig').onclick = async () => {
       try {
-        const countersRaw = document.getElementById('counters').value.trim();
         const counters = {};
-        if (countersRaw) {
-          countersRaw.split('\n').forEach((line) => {
-            const [key, names] = line.split(':');
-            if (!key || !names) return;
-            counters[key.trim()] = names.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 3);
-          });
-        }
+        rowsContainer.querySelectorAll('.counter-row').forEach((row) => {
+          const counter = row.querySelector('.counter-select').value;
+          const rawTeachers = row.querySelector('.teacher-input').value.trim();
+          const teachers = rawTeachers ? rawTeachers.split(/[、,，]/).map((s) => s.trim()).filter(Boolean).slice(0, 3) : [];
+          if (teachers.length) counters[counter] = teachers;
+        });
         await api('/api/admin/config', 'POST', {
           systemName: document.getElementById('sysName').value.trim(),
           rangeStart: Number(document.getElementById('start').value),
