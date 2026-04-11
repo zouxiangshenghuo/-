@@ -11,15 +11,35 @@ const DATA_FILE = path.join(ROOT, 'data', 'state.json');
 const sessions = new Map();
 const sseClients = new Set();
 
+const TICKET_STATUS = {
+  WAITING: 'waiting',
+  CALLED: 'called',
+  IN_PROGRESS: 'in_progress',
+  COMPLETED: 'completed',
+  ABSENT: 'absent',
+  CANCELLED: 'cancelled',
+  EXCEPTION: 'exception'
+};
+
+function ymd(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}${m}${d}`;
+}
+
 function createDefaultState() {
+  const today = ymd();
   return {
     config: {
-      systemName: '新生报名叫号系统',
-      rangeStart: 1,
-      rangeEnd: 2000,
+      systemName: '学生现场报名叫号系统',
+      queuePrefix: 'BM',
+      shortPrefix: 'A',
       voiceRepeat: 2,
       hallRecordLimit: 20,
-      maxCounterNumber: 10,
+      maxCounterNumber: 6,
+      allowRepeatTakeByPhone: false,
+      businessTypes: ['新生报名', '转校生报名', '补录报名'],
       theme: {
         fontFamily: 'Microsoft YaHei',
         titleFontSize: 42,
@@ -30,9 +50,10 @@ function createDefaultState() {
     },
     accounts: [
       { username: 'admin', password: 'admin123', role: 'admin' },
-      { username: 'user', password: 'user123', role: 'user' }
+      { username: 'teacher', password: 'teacher123', role: 'teacher' }
     ],
-    pendingNumbers: Array.from({ length: 2000 }, (_, i) => i + 1),
+    sequenceByDay: { [today]: 0 },
+    tickets: [],
     calledRecords: []
   };
 }
@@ -48,54 +69,83 @@ function migrateState(rawState) {
       theme: {
         ...defaults.config.theme,
         ...(((rawState && rawState.config && rawState.config.theme) || {}))
-      },
-      teacherPool: Array.isArray(rawState?.config?.teacherPool) ? rawState.config.teacherPool : defaults.config.teacherPool
+      }
     }
   };
 
-  merged.accounts = Array.isArray(merged.accounts) ? merged.accounts : defaults.accounts;
-  const normalizedAccounts = [];
-  const accountMap = new Map();
-  merged.accounts.forEach((account) => {
-    if (!account || !account.username || !account.password || !['admin', 'user'].includes(account.role)) return;
-    const username = String(account.username).trim();
-    if (!username) return;
-    if (accountMap.has(username)) return;
-    accountMap.set(username, true);
-    normalizedAccounts.push({ username, password: String(account.password), role: account.role });
-  });
-  if (!normalizedAccounts.find((a) => a.username === 'admin' && a.role === 'admin')) {
-    normalizedAccounts.push({ username: 'admin', password: 'admin123', role: 'admin' });
-  }
-  if (!normalizedAccounts.find((a) => a.username === 'user')) {
-    normalizedAccounts.push({ username: 'user', password: 'user123', role: 'user' });
-  }
-  merged.accounts = normalizedAccounts;
-  merged.pendingNumbers = Array.isArray(merged.pendingNumbers) ? merged.pendingNumbers : defaults.pendingNumbers;
-  merged.calledRecords = Array.isArray(merged.calledRecords) ? merged.calledRecords : [];
+  if (!Array.isArray(merged.accounts)) merged.accounts = defaults.accounts;
+  merged.accounts = merged.accounts
+    .filter((a) => a && a.username && a.password && ['admin', 'teacher'].includes(a.role))
+    .map((a) => ({ username: String(a.username).trim(), password: String(a.password), role: a.role }));
 
-  if (!Number.isInteger(merged.config.rangeStart) || merged.config.rangeStart < 1) merged.config.rangeStart = 1;
-  if (!Number.isInteger(merged.config.rangeEnd) || merged.config.rangeEnd > 2000) merged.config.rangeEnd = 2000;
-  if (merged.config.rangeStart > merged.config.rangeEnd) merged.config.rangeStart = merged.config.rangeEnd;
+  if (!merged.accounts.some((a) => a.username === 'admin')) merged.accounts.push(defaults.accounts[0]);
+  if (!merged.accounts.some((a) => a.role === 'teacher')) merged.accounts.push(defaults.accounts[1]);
+
+  if (!Array.isArray(merged.tickets)) {
+    const pendingNumbers = Array.isArray(rawState?.pendingNumbers) ? rawState.pendingNumbers : [];
+    const today = ymd();
+    merged.tickets = pendingNumbers.map((num) => ({
+      id: crypto.randomUUID(),
+      serialNumber: `${merged.config.queuePrefix || 'BM'}${today}-${String(num).padStart(3, '0')}`,
+      shortCode: `${merged.config.shortPrefix || 'A'}${String(num).padStart(3, '0')}`,
+      sequence: num,
+      queueDate: today,
+      status: TICKET_STATUS.WAITING,
+      ticketAt: new Date().toISOString(),
+      callCount: 0,
+      businessType: merged.config.businessTypes?.[0] || '新生报名',
+      counterNumber: null,
+      studentName: '',
+      phone: '',
+      updatedAt: new Date().toISOString()
+    }));
+  }
+
+  if (!Array.isArray(merged.calledRecords)) merged.calledRecords = [];
+  if (!merged.sequenceByDay || typeof merged.sequenceByDay !== 'object') merged.sequenceByDay = { [ymd()]: merged.tickets.length };
+
+  merged.config.queuePrefix = String(merged.config.queuePrefix || 'BM').slice(0, 6);
+  merged.config.shortPrefix = String(merged.config.shortPrefix || 'A').slice(0, 2);
   if (!Number.isInteger(merged.config.voiceRepeat) || merged.config.voiceRepeat < 1 || merged.config.voiceRepeat > 10) merged.config.voiceRepeat = 2;
   if (!Number.isInteger(merged.config.hallRecordLimit) || merged.config.hallRecordLimit < 1 || merged.config.hallRecordLimit > 100) merged.config.hallRecordLimit = 20;
-  if (!Number.isInteger(merged.config.maxCounterNumber) || merged.config.maxCounterNumber < 1 || merged.config.maxCounterNumber > 100) merged.config.maxCounterNumber = 10;
-  if (!merged.config.systemName || typeof merged.config.systemName !== 'string') merged.config.systemName = defaults.config.systemName;
-  if (!merged.config.theme.fontFamily) merged.config.theme.fontFamily = defaults.config.theme.fontFamily;
-  if (!Number.isInteger(merged.config.theme.titleFontSize) || merged.config.theme.titleFontSize < 20 || merged.config.theme.titleFontSize > 72) {
-    merged.config.theme.titleFontSize = defaults.config.theme.titleFontSize;
-  }
-  if (!/^#[0-9a-fA-F]{6}$/.test(merged.config.theme.titleColor)) merged.config.theme.titleColor = defaults.config.theme.titleColor;
-  merged.config.teacherPool = merged.config.teacherPool.map((t) => String(t).trim()).filter(Boolean).slice(0, 200);
+  if (!Number.isInteger(merged.config.maxCounterNumber) || merged.config.maxCounterNumber < 1 || merged.config.maxCounterNumber > 100) merged.config.maxCounterNumber = 6;
+  merged.config.allowRepeatTakeByPhone = Boolean(merged.config.allowRepeatTakeByPhone);
+  merged.config.businessTypes = Array.isArray(merged.config.businessTypes)
+    ? merged.config.businessTypes.map((s) => String(s).trim()).filter(Boolean).slice(0, 30)
+    : defaults.config.businessTypes;
+  if (!merged.config.businessTypes.length) merged.config.businessTypes = defaults.config.businessTypes;
+  merged.config.teacherPool = Array.isArray(merged.config.teacherPool)
+    ? merged.config.teacherPool.map((s) => String(s).trim()).filter(Boolean).slice(0, 200)
+    : defaults.config.teacherPool;
 
   const cleanedCounters = {};
-  Object.entries(merged.config.counters || {}).forEach(([key, teachers]) => {
+  Object.entries(merged.config.counters || {}).forEach(([key, value]) => {
     const n = Number(key);
-    if (!Number.isInteger(n) || n < 1 || n > merged.config.maxCounterNumber) return;
-    if (!Array.isArray(teachers)) return;
-    cleanedCounters[String(n)] = teachers.map((t) => String(t).trim()).filter(Boolean).slice(0, 2);
+    if (!Number.isInteger(n) || n < 1 || n > merged.config.maxCounterNumber || !Array.isArray(value)) return;
+    cleanedCounters[String(n)] = value.map((t) => String(t).trim()).filter(Boolean).slice(0, 2);
   });
   merged.config.counters = cleanedCounters;
+
+  merged.tickets = merged.tickets.map((ticket) => ({
+    id: ticket.id || crypto.randomUUID(),
+    serialNumber: String(ticket.serialNumber || ''),
+    shortCode: String(ticket.shortCode || ''),
+    sequence: Number(ticket.sequence) || 0,
+    queueDate: String(ticket.queueDate || ymd()),
+    status: Object.values(TICKET_STATUS).includes(ticket.status) ? ticket.status : TICKET_STATUS.WAITING,
+    ticketAt: ticket.ticketAt || new Date().toISOString(),
+    callCount: Number(ticket.callCount) || 0,
+    businessType: String(ticket.businessType || merged.config.businessTypes[0]),
+    counterNumber: Number.isInteger(ticket.counterNumber) ? ticket.counterNumber : null,
+    studentName: String(ticket.studentName || ''),
+    phone: String(ticket.phone || ''),
+    note: String(ticket.note || ''),
+    handledBy: String(ticket.handledBy || ''),
+    callAt: ticket.callAt || null,
+    beginAt: ticket.beginAt || null,
+    finishAt: ticket.finishAt || null,
+    updatedAt: ticket.updatedAt || ticket.ticketAt || new Date().toISOString()
+  }));
 
   return merged;
 }
@@ -103,24 +153,22 @@ function migrateState(rawState) {
 if (!fs.existsSync(DATA_FILE)) fs.writeFileSync(DATA_FILE, JSON.stringify(createDefaultState(), null, 2));
 const rawState = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
 let state = migrateState(rawState);
-if (JSON.stringify(rawState) !== JSON.stringify(state)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
-}
+if (JSON.stringify(state) !== JSON.stringify(rawState)) fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
 
 function saveState() {
   fs.writeFileSync(DATA_FILE, JSON.stringify(state, null, 2));
 }
 
-function json(res, status, data, extraHeaders = {}) {
-  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...extraHeaders });
+function json(res, status, data, headers = {}) {
+  res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...headers });
   res.end(JSON.stringify(data));
 }
 
 function parseBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
-    req.on('data', (c) => {
-      raw += c;
+    req.on('data', (chunk) => {
+      raw += chunk;
       if (raw.length > 1e6) req.destroy();
     });
     req.on('end', () => {
@@ -154,33 +202,91 @@ function getUser(req) {
   return token && sessions.has(token) ? { ...sessions.get(token), token } : null;
 }
 
-function normalizePending() {
-  state.pendingNumbers = [...new Set(state.pendingNumbers)]
-    .filter((n) => Number.isInteger(n) && n >= state.config.rangeStart && n <= state.config.rangeEnd)
-    .sort((a, b) => a - b);
+function pushEvent(type, data) {
+  const payload = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const c of sseClients) c.write(payload);
+}
+
+function todayQueue() {
+  const today = ymd();
+  return state.tickets.filter((t) => t.queueDate === today);
+}
+
+function waitingQueue() {
+  return todayQueue()
+    .filter((t) => [TICKET_STATUS.WAITING, TICKET_STATUS.ABSENT].includes(t.status))
+    .sort((a, b) => a.sequence - b.sequence);
+}
+
+function calledByCounter(counterNumber) {
+  return [...state.calledRecords]
+    .reverse()
+    .find((r) => r.counterNumber === counterNumber) || null;
+}
+
+function maskName(name) {
+  const n = String(name || '').trim();
+  if (!n) return '匿名同学';
+  if (n.length === 1) return `${n}*`;
+  return `${n.slice(0, 1)}${'*'.repeat(n.length - 1)}`;
 }
 
 function publicState() {
+  const queue = waitingQueue();
   return {
     config: state.config,
-    pendingCount: state.pendingNumbers.length,
-    nextNumber: state.pendingNumbers[0] || null,
+    pendingCount: queue.length,
+    nextTicket: queue[0]
+      ? { shortCode: queue[0].shortCode, serialNumber: queue[0].serialNumber, businessType: queue[0].businessType }
+      : null,
+    activeCalls: Array.from({ length: state.config.maxCounterNumber }, (_, i) => i + 1)
+      .map((counterNumber) => {
+        const latest = calledByCounter(counterNumber);
+        if (!latest) return null;
+        return {
+          counterNumber,
+          shortCode: latest.shortCode,
+          serialNumber: latest.serialNumber,
+          studentNameMasked: latest.studentNameMasked,
+          calledAt: latest.calledAt
+        };
+      })
+      .filter(Boolean),
     calledRecords: state.calledRecords.slice(-state.config.hallRecordLimit)
   };
 }
 
-function getNumberStatus(number) {
-  if (!Number.isInteger(number)) return { status: 'invalid' };
-  if (number < state.config.rangeStart || number > state.config.rangeEnd) return { status: 'out_of_range' };
-  if (state.pendingNumbers.includes(number)) return { status: 'pending' };
-  const latestCalled = [...state.calledRecords].reverse().find((item) => item.number === number) || null;
-  if (latestCalled) return { status: 'called', latestCalled };
-  return { status: 'unused' };
+function getTicketById(id) {
+  return state.tickets.find((t) => t.id === id);
 }
 
-function pushEvent(type, data) {
-  const payload = `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
-  for (const client of sseClients) client.write(payload);
+function generateTicket(payload) {
+  const today = ymd();
+  const nextSeq = (state.sequenceByDay[today] || 0) + 1;
+  state.sequenceByDay[today] = nextSeq;
+  const serialNumber = `${state.config.queuePrefix}${today}-${String(nextSeq).padStart(3, '0')}`;
+  const shortCode = `${state.config.shortPrefix}${String(nextSeq).padStart(3, '0')}`;
+  const now = new Date().toISOString();
+  return {
+    id: crypto.randomUUID(),
+    serialNumber,
+    shortCode,
+    sequence: nextSeq,
+    queueDate: today,
+    status: TICKET_STATUS.WAITING,
+    ticketAt: now,
+    callCount: 0,
+    businessType: payload.businessType,
+    counterNumber: null,
+    studentName: payload.studentName,
+    phone: payload.phone,
+    note: payload.note,
+    handledBy: '',
+    callAt: null,
+    beginAt: null,
+    finishAt: null,
+    updatedAt: now
+  };
 }
 
 function serveStatic(req, res) {
@@ -201,20 +307,6 @@ function serveStatic(req, res) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'GET' && req.url === '/api/events') {
-      const user = getUser(req);
-      if (!user) return json(res, 401, { error: '未登录' });
-      res.writeHead(200, {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive'
-      });
-      res.write(`event: state\ndata: ${JSON.stringify(publicState())}\n\n`);
-      sseClients.add(res);
-      req.on('close', () => sseClients.delete(res));
-      return;
-    }
-
     if (req.method === 'POST' && req.url === '/api/login') {
       const body = await parseBody(req);
       const username = String(body.username || '').trim();
@@ -224,6 +316,44 @@ const server = http.createServer(async (req, res) => {
       const token = crypto.randomUUID();
       sessions.set(token, { username: account.username, role: account.role });
       return json(res, 200, { username: account.username, role: account.role }, { 'Set-Cookie': `token=${token}; Path=/; HttpOnly; SameSite=Lax` });
+    }
+
+    if (req.method === 'GET' && req.url === '/api/public/state') return json(res, 200, publicState());
+
+    if (req.method === 'POST' && req.url === '/api/public/take-ticket') {
+      const body = await parseBody(req);
+      const studentName = String(body.studentName || '').trim();
+      const phone = String(body.phone || '').trim();
+      const note = String(body.note || '').trim();
+      const businessType = String(body.businessType || state.config.businessTypes[0]).trim();
+      if (!state.config.businessTypes.includes(businessType)) return json(res, 400, { error: '报名类型无效' });
+
+      if (!state.config.allowRepeatTakeByPhone && phone) {
+        const exists = todayQueue().find((t) => t.phone && t.phone === phone && ![TICKET_STATUS.COMPLETED, TICKET_STATUS.CANCELLED].includes(t.status));
+        if (exists) {
+          return json(res, 400, {
+            error: '该手机号已存在有效排队号',
+            existing: { id: exists.id, shortCode: exists.shortCode, serialNumber: exists.serialNumber, status: exists.status }
+          });
+        }
+      }
+
+      const ticket = generateTicket({ studentName, phone, note, businessType });
+      state.tickets.push(ticket);
+      saveState();
+      pushEvent('state', publicState());
+      return json(res, 200, {
+        ...ticket,
+        aheadCount: waitingQueue().filter((t) => t.sequence < ticket.sequence).length
+      });
+    }
+
+    if (req.method === 'GET' && req.url.startsWith('/api/public/ticket/')) {
+      const id = req.url.split('/').pop();
+      const ticket = getTicketById(id);
+      if (!ticket) return json(res, 404, { error: '未找到该取号记录' });
+      const aheadCount = waitingQueue().filter((t) => t.sequence < ticket.sequence).length;
+      return json(res, 200, { ...ticket, aheadCount, publicState: publicState() });
     }
 
     if (req.url.startsWith('/api/')) {
@@ -237,107 +367,143 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'GET' && req.url === '/api/me') return json(res, 200, { username: user.username, role: user.role });
       if (req.method === 'GET' && req.url === '/api/state') return json(res, 200, publicState());
 
-      if (req.method === 'POST' && req.url === '/api/call-next') {
+      if (req.method === 'GET' && req.url === '/api/events') {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+        res.write(`event: state\ndata: ${JSON.stringify(publicState())}\n\n`);
+        sseClients.add(res);
+        req.on('close', () => sseClients.delete(res));
+        return;
+      }
+
+      if (req.method === 'GET' && req.url.startsWith('/api/teacher/queue')) {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const counterNumber = Number(url.searchParams.get('counter'));
+        const queue = waitingQueue();
+        return json(res, 200, {
+          counterNumber: Number.isInteger(counterNumber) ? counterNumber : null,
+          queue: queue.map((t) => ({ id: t.id, shortCode: t.shortCode, businessType: t.businessType, status: t.status, ticketAt: t.ticketAt })),
+          current: Number.isInteger(counterNumber) ? calledByCounter(counterNumber) : null
+        });
+      }
+
+      if (req.method === 'POST' && req.url === '/api/teacher/call-next') {
         const body = await parseBody(req);
-        const c = Number(body.counterNumber);
-        if (!Number.isInteger(c) || c < 1 || c > state.config.maxCounterNumber) {
+        const counterNumber = Number(body.counterNumber);
+        if (!Number.isInteger(counterNumber) || counterNumber < 1 || counterNumber > state.config.maxCounterNumber) {
           return json(res, 400, { error: `登记处编号必须是1-${state.config.maxCounterNumber}` });
         }
-        normalizePending();
-        const number = state.pendingNumbers.shift();
-        if (!number) return json(res, 400, { error: '没有待叫号流水码' });
-        const record = { number, counterNumber: c, teachers: state.config.counters[String(c)] || [], calledAt: new Date().toISOString(), by: user.username };
+        const next = waitingQueue()[0];
+        if (!next) return json(res, 400, { error: '当前无待叫号学生' });
+
+        next.status = TICKET_STATUS.CALLED;
+        next.counterNumber = counterNumber;
+        next.callCount += 1;
+        next.callAt = new Date().toISOString();
+        next.updatedAt = next.callAt;
+        next.handledBy = user.username;
+
+        const record = {
+          ticketId: next.id,
+          shortCode: next.shortCode,
+          serialNumber: next.serialNumber,
+          businessType: next.businessType,
+          counterNumber,
+          studentNameMasked: maskName(next.studentName),
+          calledAt: next.callAt,
+          teachers: state.config.counters[String(counterNumber)] || [],
+          by: user.username
+        };
         state.calledRecords.push(record);
-        if (state.calledRecords.length > 1000) state.calledRecords = state.calledRecords.slice(-1000);
+        if (state.calledRecords.length > 2000) state.calledRecords = state.calledRecords.slice(-2000);
         saveState();
         pushEvent('state', publicState());
         pushEvent('called', { ...publicState(), latestRecord: record });
         return json(res, 200, record);
       }
 
+      if (req.method === 'POST' && req.url === '/api/teacher/recall') {
+        const body = await parseBody(req);
+        const ticket = getTicketById(String(body.ticketId || ''));
+        if (!ticket) return json(res, 404, { error: '号码不存在' });
+        if (![TICKET_STATUS.CALLED, TICKET_STATUS.ABSENT].includes(ticket.status)) return json(res, 400, { error: '该号码当前不可重呼' });
+
+        ticket.status = TICKET_STATUS.CALLED;
+        ticket.callCount += 1;
+        ticket.callAt = new Date().toISOString();
+        ticket.updatedAt = ticket.callAt;
+        saveState();
+        pushEvent('state', publicState());
+        return json(res, 200, { ok: true, ticket });
+      }
+
+      if (req.method === 'POST' && req.url === '/api/teacher/update-status') {
+        const body = await parseBody(req);
+        const ticket = getTicketById(String(body.ticketId || ''));
+        const status = String(body.status || '');
+        if (!ticket) return json(res, 404, { error: '号码不存在' });
+        if (![TICKET_STATUS.IN_PROGRESS, TICKET_STATUS.COMPLETED, TICKET_STATUS.ABSENT, TICKET_STATUS.CANCELLED, TICKET_STATUS.EXCEPTION, TICKET_STATUS.WAITING].includes(status)) {
+          return json(res, 400, { error: '状态不支持' });
+        }
+
+        ticket.status = status;
+        ticket.note = String(body.note || ticket.note || '');
+        ticket.updatedAt = new Date().toISOString();
+        ticket.handledBy = user.username;
+        if (status === TICKET_STATUS.IN_PROGRESS && !ticket.beginAt) ticket.beginAt = ticket.updatedAt;
+        if (status === TICKET_STATUS.COMPLETED) ticket.finishAt = ticket.updatedAt;
+        if (status === TICKET_STATUS.WAITING) ticket.counterNumber = null;
+
+        saveState();
+        pushEvent('state', publicState());
+        return json(res, 200, { ok: true, ticket });
+      }
+
       if (user.role !== 'admin') return json(res, 403, { error: '无权限' });
 
-      if (req.method === 'GET' && req.url.startsWith('/api/admin/number-status')) {
-        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-        const number = Number(url.searchParams.get('number'));
-        const result = getNumberStatus(number);
-        if (result.status === 'invalid') return json(res, 400, { error: '请输入有效流水码' });
-        return json(res, 200, { number, ...result });
+      if (req.method === 'GET' && req.url === '/api/admin/tickets') {
+        return json(res, 200, state.tickets.slice().reverse());
       }
 
       if (req.method === 'POST' && req.url === '/api/admin/config') {
         const body = await parseBody(req);
-        const start = Number(body.rangeStart);
-        const end = Number(body.rangeEnd);
-        const repeat = Number(body.voiceRepeat);
         const hallRecordLimit = Number(body.hallRecordLimit);
+        const voiceRepeat = Number(body.voiceRepeat);
         const maxCounterNumber = Number(body.maxCounterNumber);
         const titleFontSize = Number(body.theme?.titleFontSize);
-        const teacherPool = Array.isArray(body.teacherPool) ? body.teacherPool : [];
 
         if (!body.systemName) return json(res, 400, { error: '系统名称不能为空' });
-        if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end > 2000 || start > end) {
-          return json(res, 400, { error: '流水码区间必须在1-2000且起始小于结束' });
-        }
-        if (!Number.isInteger(repeat) || repeat < 1 || repeat > 10) return json(res, 400, { error: '语音播报次数必须是1-10' });
-        if (!Number.isInteger(hallRecordLimit) || hallRecordLimit < 1 || hallRecordLimit > 100) {
-          return json(res, 400, { error: '最近叫号记录显示条数必须在1-100' });
-        }
-        if (!Number.isInteger(maxCounterNumber) || maxCounterNumber < 1 || maxCounterNumber > 100) {
-          return json(res, 400, { error: '登记处数量必须在1-100' });
-        }
-        if (!Number.isInteger(titleFontSize) || titleFontSize < 20 || titleFontSize > 72) {
-          return json(res, 400, { error: '系统名称字号必须在20-72' });
-        }
-        if (!/^#[0-9a-fA-F]{6}$/.test(body.theme?.titleColor || '')) {
-          return json(res, 400, { error: '系统名称颜色必须是16进制格式（例如 #0f4aa8）' });
-        }
-        const cleanedTeacherPool = [...new Set(teacherPool.map((t) => String(t).trim()).filter(Boolean))].slice(0, 200);
-        if (!cleanedTeacherPool.length) return json(res, 400, { error: '老师名单不能为空' });
+        if (!Number.isInteger(hallRecordLimit) || hallRecordLimit < 1 || hallRecordLimit > 100) return json(res, 400, { error: '大屏记录条数需在1-100' });
+        if (!Number.isInteger(voiceRepeat) || voiceRepeat < 1 || voiceRepeat > 10) return json(res, 400, { error: '语音播报次数需在1-10' });
+        if (!Number.isInteger(maxCounterNumber) || maxCounterNumber < 1 || maxCounterNumber > 100) return json(res, 400, { error: '登记处数量需在1-100' });
+        if (!Number.isInteger(titleFontSize) || titleFontSize < 20 || titleFontSize > 72) return json(res, 400, { error: '系统名称字号需在20-72' });
+        if (!/^#[0-9a-fA-F]{6}$/.test(body.theme?.titleColor || '')) return json(res, 400, { error: '标题颜色格式错误' });
 
-        const cleanedCounters = {};
-        Object.entries(body.counters || {}).forEach(([key, value]) => {
-          const n = Number(key);
-          if (Number.isInteger(n) && n >= 1 && n <= maxCounterNumber && Array.isArray(value)) {
-            cleanedCounters[String(n)] = value
-              .map((v) => String(v).trim())
-              .filter((v) => cleanedTeacherPool.includes(v))
-              .slice(0, 2);
-          }
-        });
+        const businessTypes = Array.isArray(body.businessTypes)
+          ? body.businessTypes.map((b) => String(b).trim()).filter(Boolean).slice(0, 30)
+          : [];
+        if (!businessTypes.length) return json(res, 400, { error: '至少保留一个报名类型' });
 
         state.config = {
-          systemName: body.systemName,
-          rangeStart: start,
-          rangeEnd: end,
-          voiceRepeat: repeat,
+          ...state.config,
+          systemName: String(body.systemName).trim(),
+          queuePrefix: String(body.queuePrefix || state.config.queuePrefix).trim() || 'BM',
+          shortPrefix: String(body.shortPrefix || state.config.shortPrefix).trim() || 'A',
           hallRecordLimit,
+          voiceRepeat,
           maxCounterNumber,
+          allowRepeatTakeByPhone: Boolean(body.allowRepeatTakeByPhone),
+          businessTypes,
           theme: {
             fontFamily: String(body.theme.fontFamily || 'Microsoft YaHei').trim() || 'Microsoft YaHei',
             titleFontSize,
             titleColor: body.theme.titleColor
           },
-          teacherPool: cleanedTeacherPool,
-          counters: cleanedCounters
+          teacherPool: Array.isArray(body.teacherPool)
+            ? [...new Set(body.teacherPool.map((t) => String(t).trim()).filter(Boolean))].slice(0, 200)
+            : state.config.teacherPool,
+          counters: body.counters || {}
         };
-        state.pendingNumbers = state.pendingNumbers.filter((n) => n >= start && n <= end);
-        if (!state.pendingNumbers.length) state.pendingNumbers = Array.from({ length: end - start + 1 }, (_, i) => i + start);
-        normalizePending();
-        saveState();
-        pushEvent('state', publicState());
-        return json(res, 200, { ok: true });
-      }
 
-      if (req.method === 'POST' && req.url === '/api/admin/add-number') {
-        const body = await parseBody(req);
-        const number = Number(body.number);
-        if (!Number.isInteger(number) || number < state.config.rangeStart || number > state.config.rangeEnd) {
-          return json(res, 400, { error: '号码不在当前配置区间内' });
-        }
-        if (state.pendingNumbers.includes(number)) return json(res, 400, { error: '该号码已在待叫队列中' });
-        state.pendingNumbers.push(number);
-        normalizePending();
         saveState();
         pushEvent('state', publicState());
         return json(res, 200, { ok: true });
@@ -349,13 +515,14 @@ const server = http.createServer(async (req, res) => {
         const body = await parseBody(req);
         const username = String(body.username || '').trim();
         const password = String(body.password || '');
-        if (!username || !password || !['admin', 'user'].includes(body.role)) return json(res, 400, { error: '参数错误' });
-        const existed = state.accounts.find((a) => a.username === username);
-        if (existed) {
-          existed.password = password;
-          existed.role = body.role;
+        const role = String(body.role || 'teacher');
+        if (!username || !password || !['admin', 'teacher'].includes(role)) return json(res, 400, { error: '参数错误' });
+        const found = state.accounts.find((a) => a.username === username);
+        if (found) {
+          found.password = password;
+          found.role = role;
         } else {
-          state.accounts.push({ username, password, role: body.role });
+          state.accounts.push({ username, password, role });
         }
         saveState();
         return json(res, 200, { ok: true });
